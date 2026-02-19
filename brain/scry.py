@@ -21,13 +21,12 @@ The key difference from what you read (BLIP-2 Q-Former):
   Both serve the same goal: compress visual patch tokens into fewer LLM input tokens.
 """
 
-import os
-import sys
 import argparse
+import os
 
 import torch
 from PIL import Image
-from transformers import AutoProcessor, AutoModelForImageTextToText
+from transformers import AutoModelForImageTextToText, AutoProcessor
 
 os.environ["HF_HOME"] = os.path.join(os.path.dirname(__file__), "../.hf_cache")
 
@@ -51,8 +50,10 @@ class Scryer:
 
     def __init__(self, device: str = "auto"):
         self.device = self._resolve_device(device)
-        print(f"Scryer loading on {self.device} "
-              f"({self._vram_str() if self.device == 'cuda' else ''})")
+        print(
+            f"Scryer loading on {self.device} "
+            f"({self._vram_str() if self.device == 'cuda' else ''})"
+        )
 
         self.processor = AutoProcessor.from_pretrained(MODEL_ID)
         self.model = AutoModelForImageTextToText.from_pretrained(
@@ -144,7 +145,7 @@ class Scryer:
             )
 
         # Trim the input tokens from the output so we only decode the new tokens
-        trimmed = generated_ids[:, inputs["input_ids"].shape[1]:]
+        trimmed = generated_ids[:, inputs["input_ids"].shape[1] :]
         return self.processor.decode(trimmed[0], skip_special_tokens=True).strip()
 
     @staticmethod
@@ -176,6 +177,7 @@ class Scryer:
 # ------------------------------------------------------------------
 # CLI
 # ------------------------------------------------------------------
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
