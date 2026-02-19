@@ -1,24 +1,10 @@
 """
-brain/scry.py — The Visual Cortex
-
-Uses SmolVLM-500M (SigLIP + SmolLM2, ~1GB) to extract semantic meaning from images.
-
 Architecture:
   [Image] → SigLIP ViT-SO400M (vision encoder)
                ↓  patch embeddings → pixel_values
           SmolLM2 language model (conditioned on vision tokens + text prompt)
                ↓
           [Text description]
-
-Why SmolVLM-500M over LLaVA?
-  - RTX 2050 has 4GB VRAM. LLaVA-7B needs ~5GB even at 4-bit. SmolVLM needs ~1GB.
-  - Same conceptual architecture as BLIP-2/LLaVA: vision encoder → language model.
-  - HuggingFace-native: no trust_remote_code, fully compatible with transformers 5.x.
-  - 500M params on disk = ~1GB, leaves 3GB free for CLIP + SD later in the pipeline.
-
-The key difference from what you read (BLIP-2 Q-Former):
-  SmolVLM uses a pixel_shuffle (spatial merging) connector, not a Q-Former.
-  Both serve the same goal: compress visual patch tokens into fewer LLM input tokens.
 """
 
 import argparse
