@@ -1,32 +1,24 @@
 """
-brain/find.py — The Memory Bank (Phase 2A: Similarity Scorer)
-
-Uses CLIP (ViT-B/32) to embed images and text into a shared 512-dim vector space,
+uses CLIP (ViT-B/32) to embed images and text into a shared 512-dim vector space,
 then ranks images by cosine similarity to a query.
 
 Architecture:
                    ┌─ ViT-B/32 image encoder ─┐
-  [Image / Text] → │                           │ → 512-dim L2-normalized vector
-                   └─ Text Transformer         ─┘
+  [Image / Text] → │                          │ → 512-dim L2-normalized vector
+                   └─    Text Transformer    ─┘
                                    ↓
                       dot(img_vec, text_vec)   ← cosine sim (vectors are unit-length)
                                    ↓
                             similarity score
 
-Why cosine similarity works here:
   CLIP is trained with contrastive loss to pull matching (image, text) pairs
   close together and push non-matching pairs apart — in the same 512-dim space.
   After L2 normalization, dot product == cosine similarity (range: -1 to 1).
   In practice, CLIP scores live in ~[0.15, 0.40] for real images.
-
-Why ViT-B/32?
-  - ~600MB on disk, ~300MB VRAM — leaves room for Scryer and future SD.
-  - 32x32 patch size: faster but slightly less fine-grained than ViT-L/14.
-  - The right tradeoff for a 4GB GPU.
 """
 
-import os
 import argparse
+import os
 from pathlib import Path
 
 import torch
@@ -53,8 +45,10 @@ class Finder:
 
     def __init__(self, device: str = "auto"):
         self.device = self._resolve_device(device)
-        print(f"Finder loading CLIP on {self.device} "
-              f"({self._vram_str() if self.device == 'cuda' else ''})")
+        print(
+            f"Finder loading CLIP on {self.device} "
+            f"({self._vram_str() if self.device == 'cuda' else ''})"
+        )
 
         self.processor = CLIPProcessor.from_pretrained(MODEL_ID)
         self.model = CLIPModel.from_pretrained(
@@ -198,18 +192,18 @@ class Finder:
 # Helpers
 # ------------------------------------------------------------------
 
+
 def collect_images(folder: str) -> list[str]:
     """Recursively collect all image paths from a folder."""
     return [
-        str(p)
-        for p in Path(folder).rglob("*")
-        if p.suffix.lower() in IMAGE_EXTENSIONS
+        str(p) for p in Path(folder).rglob("*") if p.suffix.lower() in IMAGE_EXTENSIONS
     ]
 
 
 # ------------------------------------------------------------------
 # CLI
 # ------------------------------------------------------------------
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -227,16 +221,19 @@ Examples:
   uv run python brain/find.py --query brain/data/test_images/sample.jpg --folder brain/data/test_images/ --image-query
         """,
     )
-    parser.add_argument("--query", required=True,
-                        help="Text prompt or image path (if --image-query)")
-    parser.add_argument("--image",
-                        help="Single image to score against the query")
-    parser.add_argument("--folder",
-                        help="Folder of images to rank against the query")
-    parser.add_argument("--image-query", action="store_true",
-                        help="Treat --query as an image path instead of text")
-    parser.add_argument("--top-k", type=int, default=5,
-                        help="How many results to show (default: 5)")
+    parser.add_argument(
+        "--query", required=True, help="Text prompt or image path (if --image-query)"
+    )
+    parser.add_argument("--image", help="Single image to score against the query")
+    parser.add_argument("--folder", help="Folder of images to rank against the query")
+    parser.add_argument(
+        "--image-query",
+        action="store_true",
+        help="Treat --query as an image path instead of text",
+    )
+    parser.add_argument(
+        "--top-k", type=int, default=5, help="How many results to show (default: 5)"
+    )
     return parser.parse_args()
 
 
@@ -260,7 +257,9 @@ if __name__ == "__main__":
         score = finder.similarity(query_vec, img_vec)
         print(f"\n[Query]  '{args.query}'")
         print(f"[Image]  {args.image}")
-        print(f"[Score]  {score:.4f}  {'(strong match)' if score > 0.28 else '(weak match)'}\n")
+        print(
+            f"[Score]  {score:.4f}  {'(strong match)' if score > 0.28 else '(weak match)'}\n"
+        )
 
     else:
         # Folder ranking
