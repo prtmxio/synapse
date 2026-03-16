@@ -18,17 +18,22 @@ Architecture:
 """
 
 import argparse
+import json
 import os
 from pathlib import Path
 
+import hnswlib
 import torch
 import torch.nn.functional as F
 from PIL import Image
 from transformers import CLIPModel, CLIPProcessor
 
 os.environ["HF_HOME"] = os.path.join(os.path.dirname(__file__), "../.hf_cache")
+os.environ["HF_HUB_OFFLINE"] = "1"
 
-MODEL_ID = "openai/clip-vit-base-patch32"
+MODEL_ID   = "openai/clip-vit-base-patch32"
+INDEX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../brain/data/index.bin")
+META_PATH  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../brain/data/index.json")
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
 
@@ -56,6 +61,19 @@ class Finder:
             dtype=torch.float16,
         ).to(self.device)
         self.model.eval()
+
+        # Load the HNSW index and metadata once at startup.
+        # Previously these were re-read from disk on every query_index() call —
+        # that's 50-200ms of disk I/O per query for no reason. Cached here,
+        # knn_query() itself takes ~1ms.
+        self.index = None
+        self.metadata = {}
+        if os.path.exists(INDEX_PATH) and os.path.exists(META_PATH):
+            self.index = hnswlib.Index(space="cosine", dim=512)
+            self.index.load_index(INDEX_PATH)
+            with open(META_PATH) as f:
+                self.metadata = json.load(f)
+            print(f"Index loaded: {len(self.metadata)} images")
 
         print(f"CLIP ViT-B/32 ready. VRAM in use: {self._vram_used()}")
 
@@ -151,6 +169,39 @@ class Finder:
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores[:top_k]
 
+    def query_index(self, query: str, top_k: int = 5) -> list[tuple[str, float]]:
+        """
+        Search the pre-built HNSW index. Fast path — only encodes the query,
+        not the images. Images were encoded once by index.py and saved to disk.
+
+        How the conversion works:
+          HNSW returns cosine DISTANCE (lower = more similar).
+          We return cosine SIMILARITY (higher = more similar) to match rank().
+          Conversion: similarity = 1 - distance
+          So distance 0.05 → similarity 0.95 (very close match)
+             distance 0.70 → similarity 0.30 (weak match)
+        """
+        if self.index is None:
+            raise FileNotFoundError(
+                "No index found. Run: uv run python brain/index.py --folder <your_folder>"
+            )
+
+        # Encode only the query text (one forward pass, ~10ms on GPU)
+        query_vec = self.encode_text(query).cpu().to(torch.float32).numpy()
+
+        # knn_query returns:
+        #   labels:    shape [1, top_k] — integer IDs of nearest neighbors
+        #   distances: shape [1, top_k] — cosine distances (not similarities)
+        labels, distances = self.index.knn_query(query_vec, k=top_k)
+
+        results = []
+        for label, dist in zip(labels[0], distances[0]):
+            path = self.metadata[str(label)]
+            similarity = 1.0 - float(dist)  # convert distance → similarity
+            results.append((path, similarity))
+
+        return results  # already sorted closest-first by HNSW
+
     def unload(self):
         """Free VRAM before loading Stable Diffusion."""
         del self.model
@@ -234,19 +285,34 @@ Examples:
     parser.add_argument(
         "--top-k", type=int, default=5, help="How many results to show (default: 5)"
     )
+    parser.add_argument(
+        "--db",
+        action="store_true",
+        help="Query the pre-built HNSW index (fast). Requires running index.py first.",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
 
-    if not args.image and not args.folder:
-        print("Error: provide --image or --folder")
+    if not args.image and not args.folder and not args.db:
+        print("Error: provide --image, --folder, or --db")
         raise SystemExit(1)
 
     finder = Finder()
 
-    if args.image:
+    if args.db:
+        # Fast path: query the pre-built HNSW index
+        print(f"\nQuerying index for: '{args.query}'\n")
+        results = finder.query_index(args.query, top_k=args.top_k)
+        for rank, (path, score) in enumerate(results, 1):
+            bar = "█" * int(score * 100)
+            print(f"  {rank}. [{score:.4f}] {bar}")
+            print(f"     {path}")
+        print()
+
+    elif args.image:
         # Single image score
         query_vec = (
             finder.encode_image(args.query)
