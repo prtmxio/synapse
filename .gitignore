@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Model weights and caches (large binary files — download locally, see README)
+.hf_cache/
+sd-turbo/
+
+# Image datasets (bring your own)
+data/raw_imgs/
+
+# Generated outputs
+outputs/
+
+# Local planning notes
+plan.txt
+
+# HNSW index (binary, machine-specific paths — regenerate with brain/index.py)
+brain/data/index.bin
+brain/data/index.json
