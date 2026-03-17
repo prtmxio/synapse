@@ -10,12 +10,11 @@ Architecture:
 import argparse
 import os
 
+os.environ["HF_HUB_OFFLINE"] = "1"
+
 import torch
 from PIL import Image
 from transformers import AutoModelForImageTextToText, AutoProcessor
-
-os.environ["HF_HOME"] = os.path.join(os.path.dirname(__file__), "../.hf_cache")
-os.environ["HF_HUB_OFFLINE"] = "1"
 
 MODEL_ID = "HuggingFaceTB/SmolVLM-500M-Instruct"
 

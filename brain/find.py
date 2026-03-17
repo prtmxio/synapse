@@ -22,14 +22,13 @@ import json
 import os
 from pathlib import Path
 
+os.environ["HF_HUB_OFFLINE"] = "1"
+
 import hnswlib
 import torch
 import torch.nn.functional as F
 from PIL import Image
 from transformers import CLIPModel, CLIPProcessor
-
-os.environ["HF_HOME"] = os.path.join(os.path.dirname(__file__), "../.hf_cache")
-os.environ["HF_HUB_OFFLINE"] = "1"
 
 MODEL_ID   = "openai/clip-vit-base-patch32"
 INDEX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../brain/data/index.bin")

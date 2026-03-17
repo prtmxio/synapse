@@ -31,12 +31,11 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+os.environ["HF_HUB_OFFLINE"] = "1"
+
 import torch
 from diffusers import AutoPipelineForText2Image
 from PIL import Image
-
-os.environ["HF_HOME"] = os.path.join(os.path.dirname(__file__), "../.hf_cache")
-os.environ["HF_HUB_OFFLINE"] = "1"
 
 MODEL_ID  = os.path.abspath(os.path.join(os.path.dirname(__file__), "../sd-turbo"))
 OUTPUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../outputs"))
