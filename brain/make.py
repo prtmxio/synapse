@@ -97,15 +97,21 @@ class Maker:
         width: int = 512,
         height: int = 512,
         seed: int | None = None,
+        temperature: float = 1.0,
     ) -> Image.Image:
         """
         Generate an image from a text prompt.
 
         Args:
-            prompt:  text description — ideally the semantic anchor from scry.py
-            width:   output width in pixels (must be multiple of 8)
-            height:  output height in pixels (must be multiple of 8)
-            seed:    set for reproducible outputs, None for random
+            prompt:      text description — ideally the semantic anchor from scry.py
+            width:       output width in pixels (must be multiple of 8)
+            height:      output height in pixels (must be multiple of 8)
+            seed:        set for reproducible outputs, None for random
+            temperature: controls output variance (default 0.0, range 0.0–1.0)
+                         0.0 → deterministic, literal interpretation of prompt
+                         0.5 → moderate creative variation
+                         1.0 → maximum practical variation
+                         Same scale as LLM temperature: 0 = greedy, 1 = full sampling
 
         Returns:
             PIL Image (RGB, 512×512 by default)
@@ -121,22 +127,68 @@ class Maker:
                 unconditional predictions. SD-turbo was distilled WITH guidance
                 baked in — running CFG on top (scale > 1) degrades quality.
                 scale=0.0 means: only use the conditional prediction, no CFG.
+
+            temperature (latent-space noise):
+                After denoising, a small Gaussian perturbation is added to the
+                clean latent before VAE decoding:
+                  noise_std = temperature * 0.5
+                  latent = latent + randn * noise_std
+                This shifts the image in pixel space without touching the UNet's
+                noise schedule (which would cause NaN at non-standard sigma levels).
+                Range 0–1 mirrors LLM temperature: 0 = greedy, 1 = full variation.
         """
         generator = None
         if seed is not None:
             generator = torch.Generator(device=self.device).manual_seed(seed)
 
-        with torch.inference_mode():
-            result = self.pipe(
-                prompt=prompt,
-                num_inference_steps=1,
-                guidance_scale=0.0,
-                width=width,
-                height=height,
-                generator=generator,
-            )
+        if temperature > 0.0:
+            # Run denoising normally, get clean latents back (before VAE decoding).
+            # output_type="latent" stops the pipeline just before the VAE decoder.
+            #
+            # Why not scale input noise instead?
+            #   SD-turbo was distilled to work at one specific noise level (sigma=14.6).
+            #   Scaling the input beyond that pushes the UNet outside its training
+            #   distribution → garbage noise predictions → NaN in fp16 → black image.
+            #
+            # Latent-space noise is safe because:
+            #   - The denoised latent is in a well-conditioned range (~[-3, 3])
+            #   - Adding small Gaussian noise here shifts the image in pixel space
+            #     without breaking the UNet's arithmetic
+            #   - The VAE decoder is robust to small latent perturbations
+            with torch.inference_mode():
+                result = self.pipe(
+                    prompt=prompt,
+                    num_inference_steps=1,
+                    guidance_scale=0.0,
+                    width=width,
+                    height=height,
+                    generator=generator,
+                    output_type="latent",
+                )
 
-        return result.images[0]
+            latents = result.images  # shape [1, 4, H//8, W//8] — the clean latent
+            noise_std = temperature * 0.5
+            latents = latents + torch.randn_like(latents) * noise_std
+
+            # Decode manually: divide by VAE scaling factor, run decoder, postprocess
+            with torch.inference_mode():
+                decoded = self.pipe.vae.decode(
+                    latents / self.pipe.vae.config.scaling_factor
+                ).sample
+            image = self.pipe.image_processor.postprocess(decoded, output_type="pil")[0]
+        else:
+            with torch.inference_mode():
+                result = self.pipe(
+                    prompt=prompt,
+                    num_inference_steps=1,
+                    guidance_scale=0.0,
+                    width=width,
+                    height=height,
+                    generator=generator,
+                )
+            image = result.images[0]
+
+        return image
 
     def make_and_save(
         self,
@@ -145,12 +197,13 @@ class Maker:
         width: int = 512,
         height: int = 512,
         seed: int | None = None,
+        temperature: float = 1.0,
     ) -> str:
         """
         Generate and save to disk. Returns the saved file path.
         If output_path is None, saves to outputs/ with a timestamp filename.
         """
-        image = self.make(prompt, width=width, height=height, seed=seed)
+        image = self.make(prompt, width=width, height=height, seed=seed, temperature=temperature)
 
         if output_path is None:
             os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -212,7 +265,8 @@ Examples:
     parser.add_argument("--output", help="Output file path (default: outputs/make_<timestamp>.png)")
     parser.add_argument("--width",  type=int, default=512, help="Image width  (default: 512)")
     parser.add_argument("--height", type=int, default=512, help="Image height (default: 512)")
-    parser.add_argument("--seed",   type=int, default=None, help="Random seed for reproducibility")
+    parser.add_argument("--seed",        type=int,   default=None, help="Random seed for reproducibility")
+    parser.add_argument("--temperature", type=float, default=0.0,  help="Output variance 0.0–1.0 (default 0.0 = deterministic, 1.0 = max variation).")
     return parser.parse_args()
 
 
@@ -226,6 +280,7 @@ if __name__ == "__main__":
         width=args.width,
         height=args.height,
         seed=args.seed,
+        temperature=args.temperature,
     )
 
     print(f"\n[Prompt]  {args.prompt}")
