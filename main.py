@@ -10,7 +10,6 @@ Orchestrates the three-stage pipeline:
 VRAM budget (RTX 2050, 4GB):
   Stage 1+2: Scryer (1.04GB) + Finder (0.31GB) = 1.35GB  — fit together
   Stage 3:   Maker (1.70GB)                               — alone
-  Stage 4:   Scryer (1.04GB)                              — alone
 
 Co-loading Scryer + Finder saves one full model load cycle (~2-3s).
 
@@ -31,7 +30,7 @@ import warnings
 # filterwarnings("ignore") catches the remaining Python-level UserWarnings
 #   (NVML, HF Hub auth, tokenizer length).
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
-os.environ["DIFFUSERS_VERBOSITY"]    = "error"
+os.environ["DIFFUSERS_VERBOSITY"] = "error"
 warnings.filterwarnings("ignore")
 
 import argparse
@@ -41,9 +40,11 @@ import time
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def _vram() -> str:
     try:
         import torch
+
         if torch.cuda.is_available():
             free, total = torch.cuda.mem_get_info()
             used = (total - free) / 1e9
@@ -62,7 +63,7 @@ def _clip_truncate(text: str, max_words: int = 55) -> str:
     for end in (".", "!", "?"):
         last = truncated.rfind(end)
         if last != -1:
-            return truncated[:last + 1].strip()
+            return truncated[: last + 1].strip()
     return truncated.strip()
 
 
@@ -70,8 +71,10 @@ def _clip_truncate(text: str, max_words: int = 55) -> str:
 # Subcommand handlers
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def cmd_scry(args):
     from brain.scry import Scryer
+
     scryer = Scryer()
     anchor = scryer.scry(args.image)
     scryer.unload()
@@ -80,6 +83,7 @@ def cmd_scry(args):
 
 def cmd_find(args):
     from brain.find import Finder
+
     finder = Finder()
     results = finder.query_index(args.query, top_k=args.top_k)
     finder.unload()
@@ -93,8 +97,11 @@ def cmd_find(args):
 
 def cmd_make(args):
     from brain.make import Maker
+
     maker = Maker()
-    path = maker.make_and_save(args.prompt, seed=args.seed, temperature=args.temperature)
+    path = maker.make_and_save(
+        args.prompt, seed=args.seed, temperature=args.temperature
+    )
     maker.unload()
     print(f"\n[Prompt]    {args.prompt}")
     print(f"[Generated] {os.path.abspath(path)}\n")
@@ -115,16 +122,11 @@ def cmd_run(args):
       │  make(anchor) → generated image                       │
       │  Unload                                               │
       └───────────────────────────────────────────────────────┘
-      ┌─ Stage 4 ─────────────────────────────────────────────┐
-      │  Load Scryer (1.04GB)                                 │
-      │  scry(generated) → description                        │
-      │  Unload                                               │
-      └───────────────────────────────────────────────────────┘
     """
     t_start = time.perf_counter()
-    from brain.scry import Scryer
     from brain.find import Finder
     from brain.make import Maker
+    from brain.scry import Scryer
 
     # ── Stage 1+2: Scry + Find (co-loaded) ────────────────────────────────
     print(f"\n── Stage 1+2: Scry + Find  [VRAM: {_vram()}] ──────")
@@ -146,34 +148,29 @@ def cmd_run(args):
     # ── Stage 3: Make ──────────────────────────────────────────────────────
     print(f"\n── Stage 3: Make  [VRAM: {_vram()}] ───────────────")
     maker = Maker()
-    out_path = maker.make_and_save(clip_prompt, seed=args.seed, temperature=args.temperature)
+    out_path = maker.make_and_save(
+        clip_prompt, seed=args.seed, temperature=args.temperature
+    )
     maker.unload()
-    print(f"[Generated] {os.path.abspath(out_path)}")
-
-    # ── Stage 4: Scry the output ───────────────────────────────────────────
-    print(f"\n── Stage 4: Scry Output  [VRAM: {_vram()}] ────────")
-    scryer = Scryer()
-    description = scryer.scry(out_path)
-    scryer.unload()
-    print(f"[Description] {description}")
+    print(f"[Generated]\n  {os.path.abspath(out_path)}")
 
     # ── Summary ────────────────────────────────────────────────────────────
     elapsed = time.perf_counter() - t_start
     print("\n══ Synapse Complete ═══════════════════════════════")
-    print(f"  Input:       {os.path.abspath(args.image)}")
-    print(f"  Anchor:      {anchor}")
-    print(f"\n  Retrieved:   {len(results)} images")
+    print(f"  Input:     {os.path.abspath(args.image)}")
+    print(f"  Anchor:    {anchor}")
+    print(f"\n  Retrieved: {len(results)} images")
     for i, (path, score) in enumerate(results, 1):
         print(f"    {i}. [{score:.4f}] {os.path.abspath(path)}")
-    print(f"\n  Generated:   {os.path.abspath(out_path)}")
-    print(f"  Description: {description}")
-    print(f"\n  Time:        {elapsed:.1f}s")
+    print(f"\n  Generated:\n    {os.path.abspath(out_path)}")
+    print(f"\n  Time:      {elapsed:.1f}s")
     print()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Argument parser
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def build_parser():
     parser = argparse.ArgumentParser(
@@ -194,12 +191,22 @@ Examples:
     # ── run ──
     p = sub.add_parser("run", help="Full pipeline: scry → find → make")
     p.add_argument("--image", required=True, help="Input image path")
-    p.add_argument("--top-k", type=int, default=5, dest="top_k",
-                   help="Images to retrieve (default: 5)")
-    p.add_argument("--seed", type=int, default=None,
-                   help="Random seed (default: random)")
-    p.add_argument("--temperature", type=float, default=0.0,
-                   help="Output variance 0.0–1.0 (default: 0.0)")
+    p.add_argument(
+        "--top-k",
+        type=int,
+        default=5,
+        dest="top_k",
+        help="Images to retrieve (default: 5)",
+    )
+    p.add_argument(
+        "--seed", type=int, default=None, help="Random seed (default: random)"
+    )
+    p.add_argument(
+        "--temperature",
+        type=float,
+        default=0.0,
+        help="Output variance 0.0–1.0 (default: 0.0)",
+    )
 
     # ── scry ──
     p = sub.add_parser("scry", help="Describe an image")
@@ -208,16 +215,26 @@ Examples:
     # ── find ──
     p = sub.add_parser("find", help="Search HNSW index by text")
     p.add_argument("--query", required=True, help="Text query")
-    p.add_argument("--top-k", type=int, default=5, dest="top_k",
-                   help="Number of results (default: 5)")
+    p.add_argument(
+        "--top-k",
+        type=int,
+        default=5,
+        dest="top_k",
+        help="Number of results (default: 5)",
+    )
 
     # ── make ──
     p = sub.add_parser("make", help="Generate an image from a prompt")
     p.add_argument("--prompt", required=True, help="Text prompt")
-    p.add_argument("--seed", type=int, default=None,
-                   help="Random seed for reproducibility")
-    p.add_argument("--temperature", type=float, default=0.0,
-                   help="Output variance 0.0–1.0 (default: 0.0)")
+    p.add_argument(
+        "--seed", type=int, default=None, help="Random seed for reproducibility"
+    )
+    p.add_argument(
+        "--temperature",
+        type=float,
+        default=0.0,
+        help="Output variance 0.0–1.0 (default: 0.0)",
+    )
 
     return parser
 

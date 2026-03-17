@@ -38,8 +38,8 @@ from PIL import Image
 os.environ["HF_HOME"] = os.path.join(os.path.dirname(__file__), "../.hf_cache")
 os.environ["HF_HUB_OFFLINE"] = "1"
 
-MODEL_ID  = os.path.join(os.path.dirname(__file__), "../sd-turbo")
-OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "../outputs")
+MODEL_ID  = os.path.abspath(os.path.join(os.path.dirname(__file__), "../sd-turbo"))
+OUTPUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../outputs"))
 
 
 class Maker:
