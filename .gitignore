@@ -10,7 +10,6 @@ wheels/
 .venv
 
 # Model weights and caches (large binary files — download locally, see README)
-.hf_cache/
 sd-turbo/
 
 # Image datasets (bring your own)

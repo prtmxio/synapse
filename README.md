@@ -1,6 +1,6 @@
 # Synapse
 
-A local, GPU-constrained image intelligence system. Give it an image — it understands what's in it, finds visually similar images from your collection, and generates a new image inspired by it. Everything runs offline on consumer hardware.
+A local, GPU-constrained image intelligence system. Give it an image or a text prompt — it finds visually similar images from your collection and generates a new image from the semantic context. Everything runs offline on consumer hardware.
 
 **Target hardware:** NVIDIA RTX 2050 (4 GB VRAM) · Python 3.14 · [`uv`](https://docs.astral.sh/uv/)
 
@@ -8,6 +8,9 @@ A local, GPU-constrained image intelligence system. Give it an image — it unde
 
 ## How it works
 
+Two pipeline modes depending on input:
+
+**Image mode** (`--image`):
 ```
 [Input Image]
       │
@@ -21,25 +24,48 @@ A local, GPU-constrained image intelligence system. Give it an image — it unde
                          ▼
   ┌─────────────────────────────────────────────────┐
   │  Stage 2 — Find                                 │
-  │  CLIP ViT-B/32 (0.31 GB VRAM)                  │
+  │  CLIP ViT-B/32 (0.31 GB VRAM)                   │
   │  Anchor → 512-dim embedding → HNSW ANN search   │
-  │  → Top-K most similar images from your library  │
   └──────────────────────┬──────────────────────────┘
-                         │  [retrieved_1.jpg, retrieved_2.jpg, ...]
                          ▼
   ┌─────────────────────────────────────────────────┐
   │  Stage 3 — Make                                 │
   │  Stable Diffusion Turbo (1.70 GB VRAM)          │
   │  Anchor → Generated image (1 denoising step)    │
   └──────────────────────┬──────────────────────────┘
-                         │
                          ▼
                [outputs/make_<timestamp>.png]
 ```
 
-Stages 1 and 2 are co-loaded (1.35 GB total), then unloaded before Stage 3 (1.70 GB) loads — fitting the full pipeline inside 4 GB VRAM with room to spare.
+**Prompt mode** (`--prompt`):
+```
+[Text Prompt]
+      │
+      ▼
+  ┌─────────────────────────────────────────────────┐
+  │  Stage 2 — Find                                 │
+  │  CLIP ViT-B/32 (0.31 GB VRAM)                   │
+  │  Prompt → 512-dim embedding → HNSW ANN search   │
+  └──────────────────────┬──────────────────────────┘
+                         ▼
+  ┌─────────────────────────────────────────────────┐
+  │  Stage 3 — Make                                 │
+  │  Stable Diffusion Turbo (1.70 GB VRAM)          │
+  │  Prompt → Generated image (1 denoising step)    │
+  └──────────────────────┬──────────────────────────┘
+                         ▼
+               [outputs/make_<timestamp>.png]
+```
 
-**Total pipeline time:** ~22s cold-start on RTX 2050.
+Both modes can be combined: `--image --prompt` uses the image for retrieval context and the prompt to steer generation.
+
+**Pipeline latency on RTX 2050:**
+| Mode | Time |
+|---|---|
+| `--image` | ~12–14s (includes SmolVLM load + inference) |
+| `--prompt` | ~6–10s (Scryer skipped entirely) |
+
+Stages 1 and 2 are co-loaded (1.35 GB total), then unloaded before Stage 3 (1.70 GB) loads — fitting the full pipeline inside 4 GB VRAM.
 
 ---
 
@@ -77,7 +103,6 @@ synapse/
 ├── outputs/                  # Generated images (make_<timestamp>.png)
 │
 ├── sd-turbo/                 # SD-turbo model weights (git-lfs clone, not in repo)
-├── .hf_cache/                # HuggingFace model cache (SmolVLM, CLIP — not in repo)
 │
 ├── pyproject.toml            # uv project config + dependencies
 └── uv.lock                   # Locked dependency tree
@@ -95,7 +120,7 @@ uv sync
 
 ### 2. Download models
 
-**SmolVLM + CLIP** — downloaded automatically on first run (cached to `.hf_cache/`):
+**SmolVLM + CLIP** — downloaded automatically on first run (cached to `~/.cache/huggingface/`):
 
 ```bash
 uv run python brain/scry.py brain/data/test_images/sample.jpg
@@ -130,10 +155,17 @@ uv run python brain/index.py --folder data/raw_imgs/
 ### Full pipeline
 
 ```bash
+# Image mode: scry → find → generate (~12–14s)
 uv run python main.py run --image data/raw_imgs/000000101420.jpg
+
+# Prompt mode: find → generate (~6–10s)
+uv run python main.py run --prompt "a rainy street at night"
+
+# Combined: image for retrieval context, prompt steers generation
+uv run python main.py run --image photo.jpg --prompt "same scene but at dusk"
 ```
 
-Options:
+Shared options:
 - `--top-k N` — number of similar images to retrieve (default: 5)
 - `--seed N` — random seed for reproducible generation (default: random)
 - `--temperature 0.0–1.0` — generation variance (default: 0.0 = deterministic, 1.0 = max variation)
@@ -176,7 +208,7 @@ CLIP     0.31 GB  ┘  co-loaded in Stage 1+2 (1.35 GB total)
 SD-turbo 1.70 GB     Stage 3 alone
 ```
 
-Each module's `unload()` method calls `del model` + `torch.cuda.empty_cache()` to release VRAM before the next stage loads.
+Each module's `unload()` method calls `del model` + `torch.cuda.empty_cache()` to release VRAM before the next stage loads. In prompt mode, SmolVLM is never loaded — CLIP alone runs at 0.31 GB, then hands off to SD-turbo.
 
 ### Why SD-turbo uses `guidance_scale=0.0`
 
@@ -197,9 +229,13 @@ Scale mirrors LLM temperature: `0.0` = deterministic, `1.0` = maximum variation.
 
 ### HNSW index
 
-`brain/index.py` encodes your image library once with CLIP and stores the vectors in an HNSW (Hierarchical Navigable Small World) graph. At query time, `find.py` encodes only the text query (~10ms) and searches the graph in ~1ms regardless of library size — far faster than re-encoding all images per query.
+`brain/index.py` encodes your image library once with CLIP and stores the vectors in an HNSW (Hierarchical Navigable Small World) graph. At query time, `find.py` encodes only the query (~10ms) and searches the graph in ~1ms regardless of library size — far faster than re-encoding all images per query.
 
 Parameters: `space="cosine"`, `dim=512`, `M=16`, `ef_construction=200`, `ef=50`.
+
+### Offline mode
+
+All three brain modules set `HF_HUB_OFFLINE=1` before importing transformers/diffusers, which prevents any outbound network calls. Models must be present in `~/.cache/huggingface/` (SmolVLM, CLIP) and `sd-turbo/` (SD-turbo) before running. The env var is set before the library import — setting it after has no effect as HuggingFace Hub reads it at import time.
 
 ---
 
