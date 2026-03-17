@@ -109,61 +109,63 @@ def cmd_make(args):
 
 def cmd_run(args):
     """
-    Full pipeline with optimised VRAM schedule:
+    Full pipeline. Two modes:
 
-      ┌─ Stage 1+2 ──────────────────────────────────────────┐
-      │  Load Scryer (1.04GB) + Finder (0.31GB) = 1.35GB     │
-      │  scry(input) → anchor                                 │
-      │  query_index(anchor) → retrieved images               │
-      │  Unload both                                          │
-      └───────────────────────────────────────────────────────┘
-      ┌─ Stage 3 ─────────────────────────────────────────────┐
-      │  Load Maker (1.70GB)                                  │
-      │  make(anchor) → generated image                       │
-      │  Unload                                               │
-      └───────────────────────────────────────────────────────┘
+    --image only  → scry → find → gen  (anchor drives everything)
+    --prompt only → find → gen          (text drives everything, Scryer skipped)
+    --image+prompt → scry → find → gen  (image for retrieval, prompt for generation)
     """
     t_start = time.perf_counter()
     from brain.find import Finder
     from brain.make import Maker
-    from brain.scry import Scryer
 
-    # ── Stage 1+2: Scry + Find (co-loaded) ────────────────────────────────
-    print(f"\n── Stage 1+2: Scry + Find  [VRAM: {_vram()}] ──────")
-    scryer = Scryer()
-    finder = Finder()
+    anchor = None
 
-    anchor = scryer.scry(args.image)
-    clip_prompt = _clip_truncate(anchor)
-    results = finder.query_index(anchor, top_k=args.top_k)
+    if args.image:
+        from brain.scry import Scryer
+        print(f"\n── Stage 1+2: Scry + Find  [VRAM: {_vram()}] ──────")
+        scryer = Scryer()
+        finder = Finder()
+        anchor = scryer.scry(args.image)
+        results = finder.query_index(anchor, top_k=args.top_k)
+        scryer.unload()
+        finder.unload()
+        gen_prompt = _clip_truncate(args.prompt if args.prompt else anchor)
+        print(f"[Anchor]    {anchor}")
+        if args.prompt:
+            print(f"[Prompt]    {args.prompt}  (overrides anchor for generation)")
+    else:
+        print(f"\n── Stage 2: Find  [VRAM: {_vram()}] ───────────────")
+        finder = Finder()
+        results = finder.query_index(args.prompt, top_k=args.top_k)
+        finder.unload()
+        gen_prompt = _clip_truncate(args.prompt)
+        print(f"[Prompt]    {args.prompt}")
 
-    scryer.unload()
-    finder.unload()
-
-    print(f"[Anchor]    {anchor}")
     print(f"[Retrieved] {len(results)} images")
     for i, (path, score) in enumerate(results, 1):
         print(f"  {i}. [{score:.4f}] {os.path.abspath(path)}")
 
-    # ── Stage 3: Make ──────────────────────────────────────────────────────
     print(f"\n── Stage 3: Make  [VRAM: {_vram()}] ───────────────")
     maker = Maker()
     out_path = maker.make_and_save(
-        clip_prompt, seed=args.seed, temperature=args.temperature
+        gen_prompt, seed=args.seed, temperature=args.temperature
     )
     maker.unload()
     print(f"[Generated]\n  {os.path.abspath(out_path)}")
 
-    # ── Summary ────────────────────────────────────────────────────────────
     elapsed = time.perf_counter() - t_start
     print("\n══ Synapse Complete ═══════════════════════════════")
-    print(f"  Input:     {os.path.abspath(args.image)}")
-    print(f"  Anchor:    {anchor}")
+    if args.image:
+        print(f"  Input:     {os.path.abspath(args.image)}")
+        print(f"  Anchor:    {anchor}")
+    if args.prompt:
+        print(f"  Prompt:    {args.prompt}")
     print(f"\n  Retrieved: {len(results)} images")
     for i, (path, score) in enumerate(results, 1):
         print(f"    {i}. [{score:.4f}] {os.path.abspath(path)}")
     print(f"\n  Generated:\n    {os.path.abspath(out_path)}")
-    print(f"\n  Time:      {elapsed:.1f}s")
+    print(f"  Time:      {elapsed:.1f}s")
     print()
 
 
@@ -189,24 +191,12 @@ Examples:
     sub = parser.add_subparsers(dest="command", required=True)
 
     # ── run ──
-    p = sub.add_parser("run", help="Full pipeline: scry → find → make")
-    p.add_argument("--image", required=True, help="Input image path")
-    p.add_argument(
-        "--top-k",
-        type=int,
-        default=5,
-        dest="top_k",
-        help="Images to retrieve (default: 5)",
-    )
-    p.add_argument(
-        "--seed", type=int, default=None, help="Random seed (default: random)"
-    )
-    p.add_argument(
-        "--temperature",
-        type=float,
-        default=0.0,
-        help="Output variance 0.0–1.0 (default: 0.0)",
-    )
+    p = sub.add_parser("run", help="Full pipeline: [scry →] find → make")
+    p.add_argument("--image", default=None, help="Input image path")
+    p.add_argument("--prompt", default=None, help="Text prompt (find + generation)")
+    p.add_argument("--top-k", type=int, default=5, dest="top_k", help="Images to retrieve (default: 5)")
+    p.add_argument("--seed", type=int, default=None, help="Random seed (default: random)")
+    p.add_argument("--temperature", type=float, default=0.0, help="Output variance 0.0–1.0 (default: 0.0)")
 
     # ── scry ──
     p = sub.add_parser("scry", help="Describe an image")
@@ -245,5 +235,8 @@ Examples:
 
 if __name__ == "__main__":
     args = build_parser().parse_args()
+    if args.command == "run" and not args.image and not args.prompt:
+        print("error: run requires --image, --prompt, or both")
+        raise SystemExit(1)
     dispatch = {"run": cmd_run, "scry": cmd_scry, "find": cmd_find, "make": cmd_make}
     dispatch[args.command](args)
